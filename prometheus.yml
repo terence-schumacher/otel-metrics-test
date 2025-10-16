@@ -1,0 +1,38 @@
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+  external_labels:
+    cluster: 'local-dev'
+    environment: 'development'
+
+scrape_configs:
+  # Scrape metrics from OTel Collector
+  - job_name: 'otel-collector'
+    static_configs:
+      - targets: ['otel-collector:8889']
+        labels:
+          service: 'otel-collector'
+
+    metric_relabel_configs:
+      # Keep all FastAPI metrics
+      - source_labels: [__name__]
+        regex: 'fastapi_.*'
+        action: keep
+      # Keep custom metrics
+      - source_labels: [__name__]
+        regex: 'custom_.*'
+        action: keep
+      # Keep standard HTTP metrics
+      - source_labels: [__name__]
+        regex: 'http_.*'
+        action: keep
+
+  # Scrape Prometheus itself
+  - job_name: 'prometheus'
+    static_configs:
+      - targets: ['localhost:9090']
+
+  # Scrape OTel Collector internal metrics
+  - job_name: 'otel-collector-internal'
+    static_configs:
+      - targets: ['otel-collector:8888']

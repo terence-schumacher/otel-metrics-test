@@ -7,25 +7,33 @@ This application demonstrates comprehensive OTel instrumentation with:
 - OTLP export to collector on localhost:4318
 """
 
-import random
-import time
+from fastapi import FastAPI, HTTPException, Request
+from fastapi.responses import JSONResponse
+from pydantic import BaseModel
 from typing import Optional
+import uvicorn
+import time
+import random
 import os
 
-from fastapi import FastAPI, HTTPException, Request
 # OpenTelemetry imports
 from opentelemetry import metrics
-from opentelemetry.exporter.otlp.proto.http.metric_exporter import OTLPMetricExporter
-from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
-from opentelemetry.metrics import set_meter_provider
 from opentelemetry.sdk.metrics import MeterProvider
 from opentelemetry.sdk.metrics.export import PeriodicExportingMetricReader
+from opentelemetry.exporter.otlp.proto.http.metric_exporter import OTLPMetricExporter
 from opentelemetry.sdk.resources import Resource
-from pydantic import BaseModel
+from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
+from opentelemetry.metrics import get_meter_provider, set_meter_provider
 
-# Configuration
-SERVICE_NAME = "fastapi-otel-demo"
-OTLP_ENDPOINT = os.environ.get("OTLP_ENDPOINT", "http://otel-agent.otel-metrics-collector.svc.cluster.local:4318")
+# Configuration - Read from environment
+SERVICE_NAME = os.getenv("OTEL_SERVICE_NAME", "fastapi-otel-demo")
+# CRITICAL: For HTTP, use the full path. For gRPC, use just host:port
+# The Python HTTP exporter needs the full URL including /v1/metrics
+OTLP_ENDPOINT = os.getenv("OTEL_EXPORTER_OTLP_ENDPOINT", "http://localhost:4318")
+
+# Fix the endpoint - ensure it has /v1/metrics for HTTP
+if OTLP_ENDPOINT and not OTLP_ENDPOINT.endswith('/v1/metrics'):
+    OTLP_ENDPOINT = f"{OTLP_ENDPOINT}/v1/metrics"
 
 
 # Initialize OpenTelemetry
@@ -34,10 +42,10 @@ def init_telemetry():
     resource = Resource.create({
         "service.name": SERVICE_NAME,
         "service.version": "1.0.0",
-        "deployment.environment": "development"
+        "deployment.environment": os.getenv("ENVIRONMENT", "development")
     })
 
-    # Configure OTLP exporter
+    # Configure OTLP HTTP exporter with full endpoint
     exporter = OTLPMetricExporter(
         endpoint=OTLP_ENDPOINT,
         timeout=10
@@ -98,8 +106,9 @@ app = FastAPI(
     version="1.0.0"
 )
 
-# Instrument FastAPI (automatic HTTP metrics)
-FastAPIInstrumentor.instrument_app(app, meter_provider=meter_provider, tracer_provider=None)
+# Instrument FastAPI - ONLY for metrics, disable traces
+# We're not setting up trace exporters, so disable automatic trace instrumentation
+FastAPIInstrumentor.instrument_app(app)
 
 
 # Middleware for connection tracking
@@ -263,7 +272,6 @@ async def simulate_error():
 
 
 if __name__ == "__main__":
-    import uvicorn
     print(f"🚀 Starting {SERVICE_NAME}")
     print(f"📊 Exporting metrics to: {OTLP_ENDPOINT}")
     print(f"🌐 API available at: http://localhost:8000")

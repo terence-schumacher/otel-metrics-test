@@ -1,0 +1,63 @@
+mode: daemonset  # one collector per node (agent model)
+
+image:
+  repository: "ghcr.io/open-telemetry/opentelemetry-collector-releases/opentelemetry-collector-k8s"
+  # reason: k8s-optimized dist; recommended in chart README
+
+presets:
+  hostMetrics:        # enable host CPU/mem/fs/net scrapers per node
+    enabled: true
+  kubeletMetrics:     # scrape kubelet/cadvisor on the same node
+    enabled: true
+  kubernetesAttributes:  # add k8s labels (pod, node, ns) to all telemetry
+    enabled: true
+
+service:
+  enabled: false  # agent receives locally; no ClusterIP needed
+
+# The OTel Collector config the chart will render under the hood:
+config:
+  receivers:
+    otlp:
+      protocols:
+        grpc: {}    # apps can push OTLP metrics to localhost:4317
+        http: {}    # or localhost:4318
+    prometheus:
+      config:
+        scrape_configs:
+          - job_name: "pods"
+            kubernetes_sd_configs: [{role: pod}]
+            relabel_configs:
+              - action: keep
+                source_labels: [__meta_kubernetes_pod_annotation_prometheus_io_scrape]
+                regex: "true"
+              - action: replace
+                source_labels: [__meta_kubernetes_pod_annotation_prometheus_io_path]
+                target_label: __metrics_path__
+                regex: "(.+)"
+              - action: replace
+                source_labels: [__meta_kubernetes_pod_annotation_prometheus_io_port]
+                target_label: __address__
+                regex: "(.+)"
+                replacement: "$1"
+  processors:
+    batch: {}         # lower export overhead & backpressure smoothing
+    memory_limiter:   # protect the node from OOM
+      check_interval: 2s
+      limit_percentage: 85
+      spike_limit_percentage: 25
+    resource:         # tag with node identity
+      attributes:
+        - key: host.name
+          action: upsert
+          from_attribute: k8s.node.name
+  exporters:
+    otlp:
+      endpoint: "otel-gateway-collector:4317"  # central gateway svc
+      tls: { insecure: false }
+  service:
+    pipelines:
+      metrics:
+        receivers: [otlp, prometheus]   # pull & push paths
+        processors: [memory_limiter, resource, batch]
+        exporters: [otlp]

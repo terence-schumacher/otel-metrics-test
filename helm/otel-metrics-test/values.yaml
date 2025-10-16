@@ -207,7 +207,7 @@ otelCollector:
         metrics:
           receivers: [otlp]
           processors: [memory_limiter, k8sattributes, batch, resource]
-          exporters: [prometheus, debug]
+          exporters: [prometheus, debug, otlp]
       telemetry:
         logs:
           level: info

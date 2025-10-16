@@ -4,7 +4,16 @@
 apiVersion: v1
 kind: Namespace
 metadata:
-  name: otel-metrics-collector
+  name: fastapi-metrics
+  labels:
+    monitoring: enabled
+
+---
+# Namespace for OTel infrastructure
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: open-telemetry
   labels:
     monitoring: enabled
 
@@ -14,7 +23,7 @@ apiVersion: v1
 kind: ConfigMap
 metadata:
   name: otel-agent
-  namespace: otel-metrics-collector
+  namespace: open-telemetry
 data:
   config.yaml: |
     receivers:
@@ -74,9 +83,9 @@ data:
       
       # Logging for debugging
       logging:
-        loglevel: debug
-    #    sampling_initial: 5
-    #    sampling_thereafter: 200
+        loglevel: info
+        sampling_initial: 5
+        sampling_thereafter: 200
     
     extensions:
       health_check:
@@ -88,7 +97,7 @@ data:
         metrics:
           receivers: [otlp]
           processors: [memory_limiter, k8sattributes, batch, resource]
-          exporters: [logging]
+          exporters: [prometheus, logging]
 
 ---
 # ServiceAccount for OTel Agent (needs permissions for k8sattributes)
@@ -96,7 +105,7 @@ apiVersion: v1
 kind: ServiceAccount
 metadata:
   name: otel-agent
-  namespace: otel-metrics-collector
+  namespace: open-telemetry
 
 ---
 # ClusterRole for k8sattributes processor
@@ -135,7 +144,7 @@ roleRef:
 subjects:
 - kind: ServiceAccount
   name: otel-agent
-  namespace: otel-metrics-collector
+  namespace: open-telemetry
 
 ---
 # OTel Agent DaemonSet - Runs on EVERY node
@@ -143,7 +152,7 @@ apiVersion: apps/v1
 kind: DaemonSet
 metadata:
   name: otel-agent
-  namespace: otel-metrics-collector
+  namespace: open-telemetry
   labels:
     app: otel-agent
     component: otel-collector
@@ -228,7 +237,7 @@ apiVersion: v1
 kind: Service
 metadata:
   name: otel-agent
-  namespace: otel-metrics-collector
+  namespace: open-telemetry
   labels:
     app: otel-agent
 spec:
@@ -261,7 +270,7 @@ apiVersion: monitoring.coreos.com/v1
 kind: ServiceMonitor
 metadata:
   name: otel-agent
-  namespace: otel-metrics-collector
+  namespace: open-telemetry
   labels:
     prometheus: kube-prometheus
 spec:
@@ -278,19 +287,19 @@ spec:
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: otel-metrics-collector
-  namespace: otel-metrics-collector
+  name: fastapi-metrics
+  namespace: fastapi-metrics
   labels:
-    app: otel-metrics-collector
+    app: fastapi-metrics
 spec:
   replicas: 2
   selector:
     matchLabels:
-      app: otel-metrics-collector
+      app: fastapi-metrics
   template:
     metadata:
       labels:
-        app: otel-metrics-collector
+        app: fastapi-metrics
     spec:
       containers:
       - name: fastapi
@@ -301,11 +310,11 @@ spec:
         env:
         # Send to local node's OTel agent via service DNS
         - name: OTEL_EXPORTER_OTLP_ENDPOINT
-          value: "http://otel-agent.otel-metrics-collector.svc.cluster.local:4318"
+          value: "http://otel-agent.open-telemetry.svc.cluster.local:4318"
         - name: OTEL_SERVICE_NAME
-          value: "otel-metrics-collector"
+          value: "fastapi-metrics"
         - name: OTEL_RESOURCE_ATTRIBUTES
-          value: "service.namespace=otel-metrics-collector,deployment.environment=production"
+          value: "service.namespace=fastapi-metrics,deployment.environment=production"
         - name: LOG_LEVEL
           value: "INFO"
         # K8s metadata for correlation
@@ -354,10 +363,10 @@ spec:
 apiVersion: v1
 kind: Service
 metadata:
-  name: otel-metrics-collector
-  namespace: otel-metrics-collector
+  name: fastapi-metrics
+  namespace: fastapi-metrics
   labels:
-    app: otel-metrics-collector
+    app: fastapi-metrics
 spec:
   type: ClusterIP
   ports:
@@ -365,4 +374,4 @@ spec:
     targetPort: 8000
     name: http
   selector:
-    app: otel-metrics-collector
+    app: fastapi-metrics
