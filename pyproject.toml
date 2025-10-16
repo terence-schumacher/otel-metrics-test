@@ -1,0 +1,38 @@
+[build-system]
+requires = ["setuptools>=45", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "otel-metrics"
+version = "1.0.0"
+description = "Test Otel sidecar and collector"
+authors = [
+    {name = "Data Platform Team"}
+]
+
+dependencies = [
+    "fastapi>=0.115.12",
+    "uvicorn>=0.34.3",
+    "hvac>=2.1.0",
+    "httpx>=0.24.0",
+    "python-dotenv>=1.1.0",
+    "pydantic>=2.0.0",
+    "opentelemetry-api>=1.24.0",
+    "opentelemetry-sdk>=1.24.0",
+    "opentelemetry-instrumentation-fastapi>=0.45b0",
+    "opentelemetry-instrumentation-httpx>=0.45b0",
+    "opentelemetry-exporter-prometheus>=0.45b0",
+    "opentelemetry-exporter-otlp>=1.24.0",
+    "opentelemetry-distro>=0.45b0",
+    "opentelemetry-instrumentation-openai>=0.47.3",
+    "prometheus-client>=0.23.1"
+]
+requires-python = ">=3.12"
+
+[project.urls]
+Repository = "https://github.com/invisible-tech/invisible-data-platform"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["src*"]
+

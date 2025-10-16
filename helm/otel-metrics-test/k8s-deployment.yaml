@@ -1,0 +1,368 @@
+# Minimal GKE Deployment - DaemonSet Pattern
+# Deploy with: kubectl apply -f k8s-manifests.yaml
+
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: otel-metrics-collector
+  labels:
+    monitoring: enabled
+
+---
+# ConfigMap for OTel Agent (runs on each node)
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: otel-agent
+  namespace: otel-metrics-collector
+data:
+  config.yaml: |
+    receivers:
+      otlp:
+        protocols:
+          http:
+            endpoint: 0.0.0.0:4318
+          grpc:
+            endpoint: 0.0.0.0:4317
+    
+    processors:
+      # Batch processor for efficiency
+      batch:
+        timeout: 10s
+        send_batch_size: 1024
+      
+      # Add Kubernetes attributes to metrics
+      k8sattributes:
+        auth_type: "serviceAccount"
+        passthrough: false
+        extract:
+          metadata:
+            - k8s.namespace.name
+            - k8s.deployment.name
+            - k8s.pod.name
+            - k8s.pod.uid
+            - k8s.node.name
+        pod_association:
+          - sources:
+            - from: resource_attribute
+              name: k8s.pod.ip
+      
+      # Memory limiter
+      memory_limiter:
+        check_interval: 1s
+        limit_mib: 512
+        spike_limit_mib: 128
+      
+      # Add resource attributes
+      resource:
+        attributes:
+          - key: deployment.environment
+            value: "production"
+            action: insert
+          - key: k8s.cluster.name
+            value: "otel-metrics-cluster"
+            action: insert
+    
+    exporters:
+      # Prometheus exporter for metrics
+      prometheus:
+        endpoint: "0.0.0.0:8889"
+        namespace: "fastapi"
+        enable_open_metrics: true
+        resource_to_telemetry_conversion:
+          enabled: true
+      
+      # Logging for debugging
+      logging:
+        loglevel: debug
+    #    sampling_initial: 5
+    #    sampling_thereafter: 200
+    
+    extensions:
+      health_check:
+        endpoint: 0.0.0.0:13133
+    
+    service:
+      extensions: [health_check]
+      pipelines:
+        metrics:
+          receivers: [otlp]
+          processors: [memory_limiter, k8sattributes, batch, resource]
+          exporters: [logging]
+
+---
+# ServiceAccount for OTel Agent (needs permissions for k8sattributes)
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: otel-agent
+  namespace: otel-metrics-collector
+
+---
+# ClusterRole for k8sattributes processor
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: otel-agent
+rules:
+- apiGroups: [""]
+  resources:
+  - nodes
+  - nodes/proxy
+  - services
+  - endpoints
+  - pods
+  verbs: ["get", "list", "watch"]
+- apiGroups: ["apps"]
+  resources:
+  - replicasets
+  verbs: ["get", "list", "watch"]
+- apiGroups: [""]
+  resources:
+  - namespaces
+  verbs: ["get", "list", "watch"]
+
+---
+# ClusterRoleBinding
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: otel-agent
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: otel-agent
+subjects:
+- kind: ServiceAccount
+  name: otel-agent
+  namespace: otel-metrics-collector
+
+---
+# OTel Agent DaemonSet - Runs on EVERY node
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: otel-agent
+  namespace: otel-metrics-collector
+  labels:
+    app: otel-agent
+    component: otel-collector
+spec:
+  selector:
+    matchLabels:
+      app: otel-agent
+  template:
+    metadata:
+      labels:
+        app: otel-agent
+        component: otel-collector
+    spec:
+      serviceAccountName: otel-agent
+      hostNetwork: false  # Using ClusterIP service instead
+      containers:
+      - name: otel-agent
+        image: otel/opentelemetry-collector-contrib:0.91.0
+        args:
+        - --config=/etc/otel/config.yaml
+        ports:
+        - containerPort: 4318
+          name: otlp-http
+          protocol: TCP
+        - containerPort: 4317
+          name: otlp-grpc
+          protocol: TCP
+        - containerPort: 8889
+          name: prometheus
+          protocol: TCP
+        - containerPort: 13133
+          name: health
+          protocol: TCP
+        env:
+        - name: K8S_NODE_NAME
+          valueFrom:
+            fieldRef:
+              fieldPath: spec.nodeName
+        - name: K8S_POD_NAME
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.name
+        - name: K8S_POD_NAMESPACE
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.namespace
+        - name: K8S_POD_IP
+          valueFrom:
+            fieldRef:
+              fieldPath: status.podIP
+        resources:
+          requests:
+            cpu: 100m
+            memory: 128Mi
+          limits:
+            cpu: 500m
+            memory: 512Mi
+        livenessProbe:
+          httpGet:
+            path: /
+            port: 13133
+          initialDelaySeconds: 30
+          periodSeconds: 10
+        readinessProbe:
+          httpGet:
+            path: /
+            port: 13133
+          initialDelaySeconds: 10
+          periodSeconds: 5
+        volumeMounts:
+        - name: config
+          mountPath: /etc/otel
+          readOnly: true
+      volumes:
+      - name: config
+        configMap:
+          name: otel-agent
+
+---
+# Service for OTel Agent - ClusterIP so apps can use DNS
+apiVersion: v1
+kind: Service
+metadata:
+  name: otel-agent
+  namespace: otel-metrics-collector
+  labels:
+    app: otel-agent
+spec:
+  type: ClusterIP
+  clusterIP: None  # Headless service for DaemonSet
+  ports:
+  - name: otlp-http
+    port: 4318
+    targetPort: 4318
+    protocol: TCP
+  - name: otlp-grpc
+    port: 4317
+    targetPort: 4317
+    protocol: TCP
+  - name: prometheus
+    port: 8889
+    targetPort: 8889
+    protocol: TCP
+  - name: health
+    port: 13133
+    targetPort: 13133
+    protocol: TCP
+  selector:
+    app: otel-agent
+
+---
+# ServiceMonitor for Prometheus Operator
+# Note: Scrapes ALL DaemonSet pods across all nodes
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: otel-agent
+  namespace: otel-metrics-collector
+  labels:
+    prometheus: kube-prometheus
+spec:
+  selector:
+    matchLabels:
+      app: otel-agent
+  endpoints:
+  - port: prometheus
+    interval: 30s
+    path: /metrics
+
+---
+# FastAPI Application Deployment
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: otel-metrics-collector
+  namespace: otel-metrics-collector
+  labels:
+    app: otel-metrics-collector
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: otel-metrics-collector
+  template:
+    metadata:
+      labels:
+        app: otel-metrics-collector
+    spec:
+      containers:
+      - name: fastapi
+        image: us-west1-docker.pkg.dev/invisible-sre-sandbox/terence-test/otel-collector:v0.0.2
+        ports:
+        - containerPort: 8000
+          name: http
+        env:
+        # Send to local node's OTel agent via service DNS
+        - name: OTEL_EXPORTER_OTLP_ENDPOINT
+          value: "http://otel-agent.otel-metrics-collector.svc.cluster.local:4318"
+        - name: OTEL_SERVICE_NAME
+          value: "otel-metrics-collector"
+        - name: OTEL_RESOURCE_ATTRIBUTES
+          value: "service.namespace=otel-metrics-collector,deployment.environment=production"
+        - name: LOG_LEVEL
+          value: "INFO"
+        # K8s metadata for correlation
+        - name: K8S_NODE_NAME
+          valueFrom:
+            fieldRef:
+              fieldPath: spec.nodeName
+        - name: K8S_POD_NAME
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.name
+        - name: K8S_POD_NAMESPACE
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.namespace
+        - name: K8S_POD_IP
+          valueFrom:
+            fieldRef:
+              fieldPath: status.podIP
+        - name: NODE_IP
+          valueFrom:
+            fieldRef:
+              fieldPath: status.hostIP
+        resources:
+          requests:
+            cpu: 100m
+            memory: 128Mi
+          limits:
+            cpu: 500m
+            memory: 512Mi
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 8000
+          initialDelaySeconds: 30
+          periodSeconds: 10
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: 8000
+          initialDelaySeconds: 10
+          periodSeconds: 5
+
+---
+# FastAPI Service
+apiVersion: v1
+kind: Service
+metadata:
+  name: otel-metrics-collector
+  namespace: otel-metrics-collector
+  labels:
+    app: otel-metrics-collector
+spec:
+  type: ClusterIP
+  ports:
+  - port: 8000
+    targetPort: 8000
+    name: http
+  selector:
+    app: otel-metrics-collector
