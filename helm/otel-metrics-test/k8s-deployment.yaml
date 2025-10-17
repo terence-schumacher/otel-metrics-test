@@ -33,71 +33,69 @@ data:
             endpoint: 0.0.0.0:4318
           grpc:
             endpoint: 0.0.0.0:4317
-    
+
     processors:
-      # Batch processor for efficiency
       batch:
         timeout: 10s
         send_batch_size: 1024
-      
-      # Add Kubernetes attributes to metrics
-      k8sattributes:
-        auth_type: "serviceAccount"
-        passthrough: false
-        extract:
-          metadata:
-            - k8s.namespace.name
-            - k8s.deployment.name
-            - k8s.pod.name
-            - k8s.pod.uid
-            - k8s.node.name
-        pod_association:
-          - sources:
-            - from: resource_attribute
-              name: k8s.pod.ip
-      
-      # Memory limiter
+        send_batch_max_size: 2048
+    
+      # Add resource attributes
+      resource:
+        attributes:
+          - key: service.instance.id
+            value: otel-collector-1
+            action: insert
+          - key: collector.name
+            value: otel-collector
+            action: insert
+    
+      # Memory limiter to prevent OOM
       memory_limiter:
         check_interval: 1s
         limit_mib: 512
         spike_limit_mib: 128
-      
-      # Add resource attributes
-      resource:
-        attributes:
-          - key: deployment.environment
-            value: "production"
-            action: insert
-          - key: k8s.cluster.name
-            value: "otel-metrics-cluster"
-            action: insert
     
     exporters:
-      # Prometheus exporter for metrics
+      # Export to Prometheus
       prometheus:
         endpoint: "0.0.0.0:8889"
         namespace: "fastapi"
-        enable_open_metrics: true
-        resource_to_telemetry_conversion:
-          enabled: true
-      
+        const_labels:
+          environment: "development"
+    
       # Logging for debugging
       logging:
         loglevel: info
         sampling_initial: 5
         sampling_thereafter: 200
     
+      # Debug exporter (optional, for troubleshooting)
+      debug:
+        verbosity: detailed
+    
     extensions:
       health_check:
         endpoint: 0.0.0.0:13133
+      pprof:
+        endpoint: 0.0.0.0:1777
+      zpages:
+        endpoint: 0.0.0.0:55679
     
     service:
-      extensions: [health_check]
+      extensions: [health_check, pprof, zpages]
       pipelines:
         metrics:
           receivers: [otlp]
-          processors: [memory_limiter, k8sattributes, batch, resource]
+          processors: [memory_limiter, batch, resource]
           exporters: [prometheus, logging]
+    
+      telemetry:
+        logs:
+          level: info
+        metrics:
+          level: detailed
+          address: 0.0.0.0:8888
 
 ---
 # ServiceAccount for OTel Agent (needs permissions for k8sattributes)
@@ -303,7 +301,7 @@ spec:
     spec:
       containers:
       - name: fastapi
-        image: us-west1-docker.pkg.dev/invisible-sre-sandbox/terence-test/otel-collector:v0.0.2
+        image: us-west1-docker.pkg.dev/invisible-sre-sandbox/terence-test/otel-collector:v1.0.0
         ports:
         - containerPort: 8000
           name: http

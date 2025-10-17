@@ -10,7 +10,7 @@ services:
       - PORT=8000
       - DEBUG=true
       - LOG_LEVEL=DEBUG
-      - OTEL_METRICS_ENABLED=False
+      - OTEL_METRICS_ENABLED=True
     volumes:
       - ./src:/app/src
     depends_on:
